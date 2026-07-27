@@ -17,7 +17,9 @@ class IrActionsReport(models.Model):
         model access rights. Only the fields needed to build the preview url are
         returned.
         """
-        bindings = self.env["ir.actions.actions"].get_bindings(model_name).get("print", [])
+        # `get_bindings` indexes actions by binding type, and reports are bound
+        # with the "report" type, which is what the print menu displays.
+        bindings = self.env["ir.actions.actions"].get_bindings(model_name).get("report", [])
         reports = self.sudo().browse([binding["id"] for binding in bindings]).exists()
         return [
             {
