@@ -1,4 +1,4 @@
-// Copyright 2026 gmaOCR
+// Copyright 2026 TechData
 // License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
 
 import { browser } from "@web/core/browser/browser";
