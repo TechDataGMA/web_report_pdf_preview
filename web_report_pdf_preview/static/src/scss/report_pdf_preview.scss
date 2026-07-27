@@ -1,0 +1,7 @@
+// Copyright 2026 gmaOCR
+// License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
+
+// The pdf.js viewer is an iframe: it needs an explicit height to be visible.
+.o_report_pdf_preview .modal-body {
+    height: 75vh;
+}

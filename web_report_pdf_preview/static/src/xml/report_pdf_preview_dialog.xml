@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 gmaOCR
+     License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl). -->
+<templates xml:space="preserve">
+
+    <t t-name="web_report_pdf_preview.ReportPdfPreviewDialog">
+        <Dialog
+            title="props.title"
+            size="'xl'"
+            withBodyPadding="false"
+            contentClass="'o_report_pdf_preview'"
+        >
+            <iframe t-ref="iframe" t-att-src="viewerUrl" class="w-100 h-100 border-0"/>
+            <t t-set-slot="footer">
+                <button class="btn btn-primary" t-on-click="onPrint">Print</button>
+                <button class="btn btn-secondary" t-on-click="onDownload">Download</button>
+                <button class="btn btn-secondary" t-on-click="() => props.close()">Close</button>
+            </t>
+        </Dialog>
+    </t>
+
+</templates>
