@@ -2,8 +2,6 @@
 // License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
 
 import { browser } from "@web/core/browser/browser";
-import { _t } from "@web/core/l10n/translation";
-import { registry } from "@web/core/registry";
 import { user } from "@web/core/user";
 import { getReportUrl } from "@web/webclient/actions/reports/utils";
 
@@ -33,17 +31,20 @@ function getReportFilename(response, fallback) {
 }
 
 /**
- * Renders the report through the very same controller as the standard flow, but
+ * Renders the report through the very same controller as the print flow, but
  * keeps the response instead of saving it to disk.
  *
- * @param {Object} action
+ * @param {Object} reportAction
  * @param {Object} env
  * @returns {Promise<Response|false>} false when the request itself failed
  */
-async function fetchReportPdf(action, env) {
+async function fetchReportPdf(reportAction, env) {
     const formData = new FormData();
-    formData.append("data", JSON.stringify([getReportUrl(action, "pdf"), action.report_type]));
-    formData.append("context", JSON.stringify({ ...user.context, ...action.context }));
+    formData.append(
+        "data",
+        JSON.stringify([getReportUrl(reportAction, "pdf"), reportAction.report_type])
+    );
+    formData.append("context", JSON.stringify({ ...user.context, ...reportAction.context }));
     formData.append("token", "dummy-because-api-expects-one");
     if (odoo.csrf_token) {
         formData.append("csrf_token", odoo.csrf_token);
@@ -59,44 +60,31 @@ async function fetchReportPdf(action, env) {
 }
 
 /**
- * Opens the pdf of a report action in a preview dialog instead of downloading it.
+ * Renders `report` for `context` and opens it in the preview dialog.
  *
- * Returning a falsy value hands the action back to the standard flow of
- * `ir.actions.report`, so any report this handler does not take care of keeps
- * its original behaviour.
- *
- * @param {Object} action
- * @param {Object} options
  * @param {Object} env
- * @returns {Promise<boolean>}
+ * @param {Object} report id, name, report_name and report_file of the report
+ * @param {Object} context context of the print, holding the active ids
+ * @returns {Promise<boolean>} false when the pdf could not be rendered, so that
+ *      the caller can hand the report over to the standard print flow
  */
-export async function reportPdfPreviewHandler(action, options, env) {
-    if (
-        action.report_type !== "qweb-pdf" ||
-        // An IoT printer is selected for that report: it is printed, not previewed.
-        action.device_ids?.length ||
-        action.context?.disable_pdf_preview
-    ) {
-        return false;
-    }
-    const response = await fetchReportPdf(action, env);
+export async function openReportPdfPreview(env, report, context) {
+    const reportAction = {
+        report_name: report.report_name,
+        report_file: report.report_file,
+        report_type: "qweb-pdf",
+        context,
+        data: null,
+    };
+    const response = await fetchReportPdf(reportAction, env);
     const contentType = (response && response.headers.get("content-type")) || "";
     if (!response || !response.ok || !contentType.includes("application/pdf")) {
-        // The pdf could not be rendered (wkhtmltopdf missing or broken, error
-        // raised by the report, ...). The standard flow knows how to report the
-        // error and how to fall back on the html version of the report.
         return false;
     }
     env.services.dialog.add(ReportPdfPreviewDialog, {
-        title: action.display_name || action.name || _t("Report"),
+        title: report.name,
         blob: await response.blob(),
-        filename: getReportFilename(response, `${action.report_file || action.report_name}.pdf`),
+        filename: getReportFilename(response, `${report.report_file || report.report_name}.pdf`),
     });
     return true;
 }
-
-// Sequence 100 keeps this handler behind the ones that actually print the report
-// (`iot` registers itself with the default sequence).
-registry
-    .category("ir.actions.report handlers")
-    .add("web_report_pdf_preview", reportPdfPreviewHandler, { sequence: 100 });

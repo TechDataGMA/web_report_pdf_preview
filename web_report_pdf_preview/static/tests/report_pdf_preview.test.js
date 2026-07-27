@@ -1,31 +1,55 @@
 // Copyright 2026 gmaOCR
 // License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
 
-import { afterEach, expect, test } from "@odoo/hoot";
-import { queryOne } from "@odoo/hoot-dom";
+import { beforeEach, describe, expect, test } from "@odoo/hoot";
+import { queryAllTexts, queryOne } from "@odoo/hoot-dom";
 import { animationFrame } from "@odoo/hoot-mock";
 import {
     contains,
-    getService,
-    mountWithCleanup,
+    defineModels,
+    fields,
+    models,
+    mountView,
     onRpc,
     patchWithCleanup,
 } from "@web/../tests/web_test_helpers";
 
 import { browser } from "@web/core/browser/browser";
-import { MainComponentsContainer } from "@web/core/main_components_container";
-import { download, downloadFile } from "@web/core/network/download";
-import { downloadReport } from "@web/webclient/actions/reports/utils";
+import { downloadFile } from "@web/core/network/download";
+import { ActionMenus } from "@web/search/action_menus/action_menus";
 
-const PDF_ACTION = {
-    type: "ir.actions.report",
-    report_type: "qweb-pdf",
-    report_name: "web_report_pdf_preview.dummy",
-    report_file: "web_report_pdf_preview.dummy",
-    name: "Dummy Report",
-    context: { active_ids: [1] },
-    data: null,
-};
+class Foo extends models.Model {
+    _name = "foo";
+
+    name = fields.Char();
+
+    _records = [{ id: 1, name: "First record" }];
+}
+
+class IrActionsReport extends models.Model {
+    _name = "ir.actions.report";
+
+    /** Of the two reports bound to `foo`, only the first one is a pdf. */
+    get_pdf_preview_reports() {
+        return [
+            {
+                id: 1,
+                name: "Pdf report",
+                report_name: "foo.pdf_report",
+                report_file: "foo.pdf_report",
+            },
+        ];
+    }
+}
+
+defineModels([Foo, IrActionsReport]);
+
+describe.current.tags("desktop");
+
+const PRINT_ITEMS = [
+    { id: 1, name: "Pdf report", type: "ir.actions.report" },
+    { id: 2, name: "Html report", type: "ir.actions.report" },
+];
 
 /**
  * Answers `/report/download` with a fake pdf, and lets every other route go
@@ -44,33 +68,77 @@ function mockReportDownload({ contentType = "application/pdf", status = 200 } = 
                 status,
                 headers: {
                     "Content-Type": contentType,
-                    "Content-Disposition": "attachment; filename*=UTF-8''Dummy%20Report.pdf",
+                    "Content-Disposition": "attachment; filename*=UTF-8''Pdf%20report.pdf",
                 },
             });
         },
     });
 }
 
-afterEach(() => {
-    // The wkhtmltopdf state is cached on the function itself.
-    downloadReport.wkhtmltopdfStatusProm = null;
+/** Records the native print path instead of running it. */
+function stepNativePrint() {
+    patchWithCleanup(ActionMenus.prototype, {
+        executeAction(action) {
+            expect.step(`native print ${action.id}`);
+        },
+    });
+}
+
+async function openPrintMenu() {
+    await mountView({
+        type: "list",
+        resModel: "foo",
+        actionMenus: { action: [], print: PRINT_ITEMS },
+        loadActionMenus: true,
+        arch: `<list><field name="name"/></list>`,
+    });
+    await contains("thead .o_list_record_selector input").click();
+    await contains(".o_cp_action_menus .dropdown-toggle:eq(0)").click();
+}
+
+beforeEach(() => {
+    onRpc("has_group", () => true);
 });
 
-test("a pdf report opens the preview dialog", async () => {
-    mockReportDownload();
-    await mountWithCleanup(MainComponentsContainer);
+test("a preview entry is added next to each pdf report", async () => {
+    await openPrintMenu();
 
-    await getService("action").doAction(PDF_ACTION);
+    expect(queryAllTexts(".o-dropdown--menu .o-dropdown-item")).toEqual([
+        "Pdf report",
+        "Preview: Pdf report",
+        "Html report",
+    ]);
+});
+
+test("the preview entry opens the dialog without printing", async () => {
+    mockReportDownload();
+    stepNativePrint();
+    await openPrintMenu();
+
+    await contains(".o-dropdown--menu .o-dropdown-item:contains(Preview)").click();
     await animationFrame();
 
     expect(".o_dialog .o_report_pdf_preview").toHaveCount(1);
-    expect(".o_dialog header .modal-title").toHaveText("Dummy Report");
-    // The test framework moves `t-att-src` to `t-att-data-src` on iframes so
-    // that they never hit the network (see web/static/tests/_framework/mock_templates.hoot.js).
+    expect(".o_dialog header .modal-title").toHaveText("Pdf report");
+    // The test framework moves `t-att-src` to `t-att-data-src` on iframes so that
+    // they never hit the network (see tests/_framework/mock_templates.hoot.js).
     expect(queryOne(".o_dialog iframe").getAttribute("data-src")).toMatch(
         /^\/web\/static\/lib\/pdfjs\/web\/viewer\.html\?file=blob/
     );
+    // Only the preview render: the print action was not executed.
     expect.verifySteps(["/report/download"]);
+});
+
+test("the native print entry is left untouched", async () => {
+    mockReportDownload();
+    stepNativePrint();
+    await openPrintMenu();
+
+    await contains(".o-dropdown--menu .o-dropdown-item:eq(0)").click();
+    await animationFrame();
+
+    expect(".o_dialog").toHaveCount(0);
+    expect.verifySteps(["native print 1"]);
 });
 
 test("the download button reuses the previewed pdf", async () => {
@@ -78,14 +146,14 @@ test("the download button reuses the previewed pdf", async () => {
     patchWithCleanup(downloadFile, {
         _download: (data, filename, mimetype) => {
             expect(data).toBeInstanceOf(Blob);
-            expect(filename).toBe("Dummy Report.pdf");
+            expect(filename).toBe("Pdf report.pdf");
             expect(mimetype).toBe("application/pdf");
             expect.step("saved");
         },
     });
-    await mountWithCleanup(MainComponentsContainer);
+    await openPrintMenu();
 
-    await getService("action").doAction(PDF_ACTION);
+    await contains(".o-dropdown--menu .o-dropdown-item:contains(Preview)").click();
     await animationFrame();
     await contains(".o_dialog footer button:contains(Download)").click();
 
@@ -93,58 +161,14 @@ test("the download button reuses the previewed pdf", async () => {
     expect.verifySteps(["/report/download", "saved"]);
 });
 
-test("a report that cannot be rendered falls back on the standard flow", async () => {
+test("a report that cannot be rendered falls back on the print flow", async () => {
     mockReportDownload({ contentType: "text/html", status: 500 });
-    patchWithCleanup(download, {
-        _download: () => {
-            expect.step("standard download");
-            return Promise.resolve();
-        },
-    });
-    onRpc("/report/check_wkhtmltopdf", () => "ok");
-    await mountWithCleanup(MainComponentsContainer);
+    stepNativePrint();
+    await openPrintMenu();
 
-    await getService("action").doAction(PDF_ACTION);
+    await contains(".o-dropdown--menu .o-dropdown-item:contains(Preview)").click();
     await animationFrame();
 
     expect(".o_dialog").toHaveCount(0);
-    expect.verifySteps(["/report/download", "standard download"]);
-});
-
-test("a text report is left to the standard flow", async () => {
-    mockReportDownload();
-    patchWithCleanup(download, {
-        _download: () => {
-            expect.step("standard download");
-            return Promise.resolve();
-        },
-    });
-    await mountWithCleanup(MainComponentsContainer);
-
-    await getService("action").doAction({ ...PDF_ACTION, report_type: "qweb-text" });
-    await animationFrame();
-
-    expect(".o_dialog").toHaveCount(0);
-    expect.verifySteps(["standard download"]);
-});
-
-test("the preview can be disabled through the context", async () => {
-    mockReportDownload();
-    patchWithCleanup(download, {
-        _download: () => {
-            expect.step("standard download");
-            return Promise.resolve();
-        },
-    });
-    onRpc("/report/check_wkhtmltopdf", () => "ok");
-    await mountWithCleanup(MainComponentsContainer);
-
-    await getService("action").doAction({
-        ...PDF_ACTION,
-        context: { ...PDF_ACTION.context, disable_pdf_preview: true },
-    });
-    await animationFrame();
-
-    expect(".o_dialog").toHaveCount(0);
-    expect.verifySteps(["standard download"]);
+    expect.verifySteps(["/report/download", "native print 1"]);
 });
